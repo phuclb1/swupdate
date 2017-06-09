@@ -133,6 +133,7 @@ server_send_deployment_reply(const int action_id, const int job_cnt_max,
 			     const int job_cnt_cur, const char *finished,
 			     const char *execution_status, int numdetails, const char *details[]);
 server_op_res_t server_send_cancel_reply(channel_t *channel, const int action_id);
+static int get_target_data_length(void);
 
 server_hawkbit_t server_hawkbit = {.url = NULL,
 				   .polling_interval = DEFAULT_POLLING_INTERVAL,
@@ -527,7 +528,7 @@ server_op_res_t server_set_config_data(json_object *json_root)
 		if (server_hawkbit.configData_url)
 			free(server_hawkbit.configData_url);
 		server_hawkbit.configData_url = tmp;
-		server_hawkbit.has_to_send_configData = true;
+		server_hawkbit.has_to_send_configData = (get_target_data_length() > 0) ? true : false;
 		TRACE("ConfigData: %s\n", server_hawkbit.configData_url);
 	}
 	return SERVER_OK;
@@ -669,7 +670,7 @@ static int server_check_during_dwl(void)
 	 * if something on the server was changed and a cancel
 	 * was requested
 	 */
-	if ((now.tv_sec - server_time.tv_sec) < (server_get_polling_interval()))
+	if ((now.tv_sec - server_time.tv_sec) < ((int)server_get_polling_interval()))
 		return 0;
 
 	/* Update current server time */
@@ -1042,7 +1043,7 @@ server_op_res_t server_process_update_artifact(int action_id,
 		server_get_current_time(&server_time);
 
 		channel_op_res_t cresult =
-		    channel->get_file(channel, (void *)&channel_data, 0);
+		    channel->get_file(channel, (void *)&channel_data, FD_USE_IPC);
 		if ((result = map_channel_retcode(cresult)) != SERVER_OK) {
 			/* this is called to collect errors */
 			ipc_wait_for_complete(server_update_status_callback);
@@ -1287,8 +1288,8 @@ server_op_res_t server_install_update(void)
 
 	if (server_send_deployment_reply(
 		action_id, json_data_chunk_max, json_data_chunk_count,
-		reply_status_result_finished.none,
-		reply_status_execution.proceeding, 1,
+		reply_status_result_finished.success,
+		reply_status_execution.closed, 1,
 		&details[3]) != SERVER_OK) {
 		ERROR("Error while reporting installation success to "
 		      "server.\n");
@@ -1318,6 +1319,18 @@ cleanup:
 	return result;
 }
 
+int get_target_data_length(void)
+{
+	int len = 0;
+	struct dict_entry *entry;
+
+	LIST_FOREACH(entry, &server_hawkbit.configdata, next) {
+		len += strlen(entry->varname) + strlen(entry->value) + strlen (" : ") + 6;
+	}
+
+	return len;
+}
+
 server_op_res_t server_send_target_data(void)
 {
 	channel_t *channel = server_hawkbit.channel;
@@ -1327,12 +1340,12 @@ server_op_res_t server_send_target_data(void)
 	server_op_res_t result = SERVER_OK;
 
 	assert(channel != NULL);
-	LIST_FOREACH(entry, &server_hawkbit.configdata, next) {
-		len += strlen(entry->varname) + strlen(entry->value) + strlen (" : ") + 6;
-	}
+	len = get_target_data_length();
 
-	if (!len)
+	if (!len) {
+		server_hawkbit.has_to_send_configData = false;
 		return SERVER_OK;
+	}
 
 	char *configData = (char *)(malloc(len + 16));
 	memset(configData, 0, len + 16);
@@ -1777,6 +1790,12 @@ static server_op_res_t server_activation_ipc(ipc_message *msg)
 	    server_get_deployment_info(server_hawkbit.channel, &channel_data, &server_action_id);
 
 	server_op_res_t response = SERVER_OK;
+
+	if (result == SERVER_UPDATE_CANCELED) {
+		DEBUG("Acknowledging cancelled update.\n");
+		(void)server_send_cancel_reply(server_hawkbit.channel, server_action_id);
+	}
+
 	if (action_id != server_action_id) {
 		TRACE("Deployment changed on server: our id %d, on server %d",
 			action_id, server_action_id);
