@@ -34,12 +34,13 @@
 #include "util.h"
 #include "pctl.h"
 #include "progress.h"
-
+#include "time.h"
 /*
  * There is a list of notifier. Each registered
  * notifier will receive the notification
  * and can process it.
  */
+static clock_t time_count = 0;
 struct notify_elem {
 	notifier client;
 	STAILQ_ENTRY(notify_elem) next;
@@ -122,6 +123,53 @@ void notify(RECOVERY_STATUS status, int error, const char *msg)
 /*
  * Default notifier, it prints to stdout
  */
+ 
+static void console_notifier (RECOVERY_STATUS status, int error, const char *msg)
+{
+        char current[100];
+        char tmp[100];
+        clock_t t = clock() ;
+        switch(status) {
+        case IDLE:
+                strncpy(current, "No SWUPDATE running : ", sizeof(current));
+                break;
+        case DOWNLOAD:
+                sprintf(current, "SWUPDATE downloading : %f ", ((float)time_count)/CLOCKS_PER_SEC);
+                break;
+        case START:
+                time_count = clock();
+                sprintf(tmp, "SWUPDATE started : [%f s]", ((float)time_count)/CLOCKS_PER_SEC);
+                strncpy(current, tmp, sizeof(current));
+                break;
+        case RUN:
+				        sprintf(tmp, "SWUPDATE running !  [%f s]",((float)(t-time_count))/CLOCKS_PER_SEC);
+                strncpy(current, tmp, sizeof(current));
+                break;	
+             //   strncpy(current, "SWUPDATE running : ", sizeof(current));
+        case SUCCESS:
+                sprintf(tmp, "SWUPDATE successful !  [%f s]",((float)(t-time_count))/CLOCKS_PER_SEC);
+                strncpy(current, tmp, sizeof(current));
+                break;
+        case FAILURE:
+                snprintf(current, sizeof(current), "SWUPDATE failed [%d]", error);
+                break;
+        case SUBPROCESS:
+                sprintf(tmp, "EVENT [%d] :  : [%f s]",error, ((float)(t-time_count))/CLOCKS_PER_SEC);
+                strncpy(current, tmp, sizeof(current));
+                break;
+        case DONE:
+                sprintf(tmp, "SWUPDATE done :  [%f s]",((float)(t-time_count))/CLOCKS_PER_SEC);
+                strncpy(current, tmp, sizeof(current));
+                break;
+        }
+
+        fprintf(stdout, "[NOTIFY] : %s %s\n", current, msg ? msg : "");
+        fflush(stdout);
+}
+ 
+ 
+ 
+/* 
 static void console_notifier (RECOVERY_STATUS status, int error, const char *msg)
 {
 	char current[80];
@@ -155,6 +203,7 @@ static void console_notifier (RECOVERY_STATUS status, int error, const char *msg
 	fprintf(stdout, "[NOTIFY] : %s %s\n", current, msg ? msg : "");
 	fflush(stdout);
 }
+*/
 
 /*
  * Process notifier: this is called when a process has something to say
