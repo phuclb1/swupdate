@@ -1288,8 +1288,8 @@ server_op_res_t server_install_update(void)
 
 	if (server_send_deployment_reply(
 		action_id, json_data_chunk_max, json_data_chunk_count,
-		reply_status_result_finished.none,
-		reply_status_execution.proceeding, 1,
+		reply_status_result_finished.success,
+		reply_status_execution.closed, 1,
 		&details[3]) != SERVER_OK) {
 		ERROR("Error while reporting installation success to "
 		      "server.\n");
