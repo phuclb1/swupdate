@@ -510,8 +510,7 @@ int copyfile(int fdin, void *out, int nbytes, unsigned long *offs,
 			goto copyfile_exit;
 		}
 	}
-
-
+valid_hash:
 	if (IsValidHash(hash)) {
 		swupdate_HASH_final(dgst, md_value, &md_len);
 
@@ -563,7 +562,7 @@ int copyimage(void *out, struct img_type *img, writeimage callback)
 			&img->checksum,
 			img->sha256,
 			img->is_encrypted,
-      img->fname,
+			img->fname,
 			callback);
 }
 
@@ -627,7 +626,7 @@ off_t extract_sw_description(int fd, const char *descfile, off_t start)
 		close(fdout);
 		return -1;
 	}
-	if (copyfile(fd, &fdout, fdh.size, &offset, 0, 0, &checksum, NULL, 0, NULL) < 0) {
+	if (copyfile(fd, &fdout, fdh.size, &offset, 0, 0, &checksum, NULL, 0, NULL, NULL) < 0) {
 		ERROR("%s corrupted or not valid\n", descfile);
 		close(fdout);
 		return -1;
@@ -689,7 +688,7 @@ off_t extract_next_file(int fd, int fdout, off_t start, int compressed,
 
 	if (lseek(fd, offset, SEEK_SET) < 0)
 		ERROR("CPIO file corrupted : %s\n", strerror(errno));
-	if (copyfile(fd, &fdout, fdh.size, &offset, 0, compressed, &checksum, hash, encrypted, NULL) < 0) {
+	if (copyfile(fd, &fdout, fdh.size, &offset, 0, compressed, &checksum, hash, encrypted,NULL, NULL) < 0) {
 		ERROR("Error copying extracted file\n");
 	}
 
@@ -738,7 +737,7 @@ int cpio_scan(int fd, struct swupdate_cfg *cfg, off_t start)
 		 * use copyfile for checksum verification, as we skip file
 		 * we do not have to provide fdout
 		 */
-		if (copyfile(fd, NULL, fdh.size, &offset, 1, 0, &checksum, NULL, 0, NULL) != 0) {
+		if (copyfile(fd, NULL, fdh.size, &offset, 1, 0, &checksum, NULL, 0,NULL, NULL) != 0) {
 			ERROR("invalid archive\n");
 			return -1;
 		}
