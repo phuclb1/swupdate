@@ -152,7 +152,7 @@ int copyfile_extract_dec(int fdin, void *out, int nbytes, unsigned long *offs,
 	void *dgst,char *fname, writeimage callback);
 int copyfile_dec_extract(int fdin, void *out, int nbytes, unsigned long *offs,
 	int skip_file,  uint32_t *checksum,
-	void *dgst, char *fname,writeimage callback)
+	void *dgst, char *fname,writeimage callback);
 int copyfile(int fdin, void *out, int nbytes, unsigned long *offs,
 	int skip_file, int compressed, uint32_t *checksum,
 	unsigned char *hash, int encrypted, char *fname, writeimage callback);
