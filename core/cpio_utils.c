@@ -28,11 +28,16 @@
 #include "sslapi.h"
 #include "progress.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #define MODULE_NAME "cpio"
 
 #define BUFF_SIZE	 16384
 
 #define NPAD_BYTES(o) ((4 - (o % 4)) % 4)
+
+#define CONFIG_EXTRACT_FIRST 1
 
 static int get_cpiohdr(unsigned char *buf, unsigned long *size,
 			unsigned long *namesize, unsigned long *chksum)
@@ -109,10 +114,259 @@ static int copy_write(void *out, const void *buf, int len)
 
 	return 0;
 }
+int copyfile_extract_dec(int fdin, void *out, int nbytes, unsigned long *offs,
+		int skip_file, uint32_t *checksum, void *dgst, char *fname,
+		writeimage callback)
+{
+	unsigned long size;
+	unsigned char *in = NULL, *inbuf;
+	unsigned char *decbuf = NULL;
+	unsigned long filesize = nbytes;
+	unsigned int percent, prevpercent = 0;
+	int ret = 0;
+	void *dcrypt = NULL; /* use a private context for decryption */
+	int len;
+
+	unsigned char *aes_key;
+	unsigned char *ivt;
+	struct stat tmp_stat;
+
+	char tmpfile_path[255];
+	char infile_path[255];
+	snprintf(tmpfile_path, sizeof(tmpfile_path), "%s%s",
+		TMPDIR,"tmp.enc");
+	snprintf(infile_path, sizeof(infile_path), "%s%s",
+			TMPDIR,fname);
+
+	int ftmp = openfileoutput(tmpfile_path);
+
+	//int fdout = (out != NULL) ? *(int *) out : -1;
+	ret = decompress_image(fdin, offs, nbytes, ftmp, checksum,
+			dgst);
+	close(ftmp);
+	if (ret < 0) {
+		ERROR("gunzip failure %d (errno %d) -- aborting\n", ret, errno);
+		goto copyfile_exit;
+	}
+
+	remove(infile_path);
+
+	int ftmp_in = open(tmpfile_path, O_RDONLY);
+
+	stat(tmpfile_path, &tmp_stat);
+	if (ftmp_in < 0) {
+		ERROR("Tmp file %s cannot be opened", tmpfile_path);
+		return -1;
+	}
+	unsigned long tmp_nbyte = tmp_stat.st_size;
+
+	//decrypt
+	in = (unsigned char *) malloc(BUFF_SIZE);
+	if (!in)
+		return -ENOMEM;
+
+	decbuf = (unsigned char *) calloc(1, BUFF_SIZE + AES_BLOCK_SIZE);
+	if (!decbuf) {
+		ret = -ENOMEM;
+		goto copyfile_exit;
+	}
+
+	aes_key = get_aes_key();
+	ivt = get_aes_ivt();
+	dcrypt = swupdate_DECRYPT_init(aes_key, ivt);
+	if (!dcrypt) {
+		ERROR("decrypt initialization failure, aborting");
+		ret = -EFAULT;
+		goto copyfile_exit;
+	}
+
+	while (tmp_nbyte > 0) {
+		size = (tmp_nbyte < BUFF_SIZE ? tmp_nbyte : BUFF_SIZE);
+
+		if ((ret = fill_buffer(ftmp_in, in, size, offs, checksum, NULL) < 0)) {
+			goto copyfile_exit;
+		}
+
+		tmp_nbyte -= size;
+		if (skip_file)
+			continue;
+
+		inbuf = in;
+		len = size;
+
+		ret = swupdate_DECRYPT_update(dcrypt, decbuf, &len, in, size);
+		if (ret < 0)
+			goto copyfile_exit;
+		inbuf = decbuf;
+
+		/*
+		 * If there is no enough place,
+		 * returns an error and close the output file that
+		 * results corrupted. This lets the cleanup routine
+		 * to remove it
+		 */
+		if (callback(out, inbuf, len) < 0) {
+			ret = -ENOSPC;
+			goto copyfile_exit;
+		}
+
+		percent = (unsigned int) (((double) (filesize - nbytes)) * 100
+				/ filesize);
+		if (percent != prevpercent) {
+			prevpercent = percent;
+			swupdate_progress_update(percent);
+		}
+	}
+
+	ret = swupdate_DECRYPT_final(dcrypt, decbuf, &len);
+	if (ret < 0)
+		goto copyfile_exit;
+	if (callback(out, decbuf, len) < 0) {
+		ret = -ENOSPC;
+		goto copyfile_exit;
+	}
+
+	fill_buffer(ftmp_in, in, NPAD_BYTES(*offs), offs, checksum, NULL);
+
+	ret = 0;
+
+	copyfile_exit:
+	if (in)
+		free(in);
+	if (dcrypt) {
+		swupdate_DECRYPT_cleanup(dcrypt);
+	}
+	if (decbuf)
+		free(decbuf);
+	close(ftmp_in);
+	remove(tmpfile_path);
+	return ret;
+}
+
+int copyfile_dec_extract(int fdin, void *out, int nbytes, unsigned long *offs,
+		int skip_file, uint32_t *checksum, void *dgst, char *fname,
+		writeimage callback)
+{
+	unsigned long size;
+	unsigned char *in = NULL, *inbuf;
+	unsigned char *decbuf = NULL;
+	unsigned long filesize = nbytes;
+	unsigned int percent, prevpercent = 0;
+	int ret = 0;
+	void *dcrypt = NULL; /* use a private context for decryption */
+	int len;
+
+	unsigned char *aes_key;
+	unsigned char *ivt;
+
+	char tmpfile_path[255];
+	char infile_path[255];
+	snprintf(tmpfile_path, sizeof(tmpfile_path), "%s%s",
+			TMPDIR,"tmp.enc");
+	snprintf(infile_path, sizeof(infile_path), "%s%s",
+				TMPDIR,fname);
+	int ftmp = openfileoutput(tmpfile_path);
+
+	in = (unsigned char *) malloc(BUFF_SIZE);
+	if (!in)
+		return -ENOMEM;
+
+	decbuf = (unsigned char *) calloc(1, BUFF_SIZE + AES_BLOCK_SIZE);
+	if (!decbuf) {
+		ret = -ENOMEM;
+		goto copyfile_exit;
+	}
+
+	aes_key = get_aes_key();
+	ivt = get_aes_ivt();
+	dcrypt = swupdate_DECRYPT_init(aes_key, ivt);
+	if (!dcrypt) {
+		ERROR("decrypt initialization failure, aborting");
+		ret = -EFAULT;
+		goto copyfile_exit;
+	}
+
+	while (nbytes > 0) {
+		size = (nbytes < BUFF_SIZE ? nbytes : BUFF_SIZE);
+
+		if ((ret = fill_buffer(fdin, in, size, offs, checksum, dgst) < 0)) {
+			goto copyfile_exit;
+		}
+
+		nbytes -= size;
+		if (skip_file)
+			continue;
+
+		inbuf = in;
+		len = size;
+
+		ret = swupdate_DECRYPT_update(dcrypt, decbuf, &len, in, size);
+		if (ret < 0)
+			goto copyfile_exit;
+		inbuf = decbuf;
+
+		/*
+		 * If there is no enough place,
+		 * returns an error and close the output file that
+		 * results corrupted. This lets the cleanup routine
+		 * to remove it
+		 */
+		if (callback(&ftmp, inbuf, len) < 0) {
+			ret = -ENOSPC;
+			goto copyfile_exit;
+		}
+
+		percent = (unsigned int) (((double) (filesize - nbytes)) * 100
+				/ filesize);
+		if (percent != prevpercent) {
+			prevpercent = percent;
+			swupdate_progress_update(percent);
+		}
+	}
+
+	ret = swupdate_DECRYPT_final(dcrypt, decbuf, &len);
+	if (ret < 0)
+		goto copyfile_exit;
+	if (callback(&ftmp, decbuf, len) < 0) {
+		ret = -ENOSPC;
+		goto copyfile_exit;
+	}
+
+	fill_buffer(fdin, in, NPAD_BYTES(*offs), offs, checksum, NULL);
+	close(ftmp);
+	remove(infile_path);
+
+	int ftmp_in = open(tmpfile_path, O_RDONLY);
+	struct stat tmp_stat;
+	stat(tmpfile_path, &tmp_stat);
+	if (ftmp_in < 0) {
+		ERROR("Tmp file %s cannot be opened", tmpfile_path);
+		return -1;
+	}
+	int fdout = (out != NULL) ? *(int *) out : -1;
+	ret = decompress_image(ftmp_in, offs, tmp_stat.st_size, fdout, checksum,
+	NULL);
+	if (ret < 0) {
+		ERROR("gunzip failure %d (errno %d) -- aborting\n", ret, errno);
+		goto copyfile_exit;
+	}
+
+	ret = 0;
+
+	copyfile_exit: if (in)
+		free(in);
+	if (dcrypt) {
+		swupdate_DECRYPT_cleanup(dcrypt);
+	}
+	if (decbuf)
+		free(decbuf);
+	remove(tmpfile_path);
+	return ret;
+}
 
 int copyfile(int fdin, void *out, int nbytes, unsigned long *offs,
 	int skip_file, int __attribute__ ((__unused__)) compressed,
-	uint32_t *checksum, unsigned char *hash, int encrypted, writeimage callback)
+	uint32_t *checksum, unsigned char *hash, int encrypted, char *fname, writeimage callback)
 {
 	unsigned long size;
 	unsigned char *in = NULL, *inbuf;
@@ -149,8 +403,21 @@ int copyfile(int fdin, void *out, int nbytes, unsigned long *offs,
 	 * is not (yet ?) supported
 	 */
 	if (compressed && encrypted) {
-		ERROR("encrypted zip images are not yet supported -- aborting\n");
-		return -EINVAL;
+#ifdef CONFIG_EXTRACT_FIRST
+		ret = copyfile_extract_dec(fdin,out,nbytes,offs,skip_file,checksum,dgst,fname,callback);
+		if (ret < 0) {
+			ERROR("decrypt & decompress failure %d (errno %d) -- aborting\n", ret, errno);
+			goto copyfile_exit;
+		}
+		goto valid_hash;
+#else
+		ret = copyfile_dec_extract(fdin,out,nbytes,offs,skip_file,checksum,dgst,fname,callback);
+		if (ret < 0) {
+			ERROR("decrypt & decompress failure %d (errno %d) -- aborting\n", ret, errno);
+			goto copyfile_exit;
+		}
+		goto valid_hash;
+#endif
 	}
 
 	in = (unsigned char *)malloc(BUFF_SIZE);
@@ -296,6 +563,7 @@ int copyimage(void *out, struct img_type *img, writeimage callback)
 			&img->checksum,
 			img->sha256,
 			img->is_encrypted,
+      img->fname,
 			callback);
 }
 

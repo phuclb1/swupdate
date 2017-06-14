@@ -147,9 +147,15 @@ int decompress_image(int infile, unsigned long *offs, int nbytes,
 	int outfile, uint32_t *checksum, void *dgst);
 
 int openfile(const char *filename);
+int copyfile_extract_dec(int fdin, void *out, int nbytes, unsigned long *offs,
+	int skip_file,  uint32_t *checksum,
+	void *dgst,char *fname, writeimage callback);
+int copyfile_dec_extract(int fdin, void *out, int nbytes, unsigned long *offs,
+	int skip_file,  uint32_t *checksum,
+	void *dgst, char *fname,writeimage callback)
 int copyfile(int fdin, void *out, int nbytes, unsigned long *offs,
 	int skip_file, int compressed, uint32_t *checksum,
-	unsigned char *hash, int encrypted, writeimage callback);
+	unsigned char *hash, int encrypted, char *fname, writeimage callback);
 int copyimage(void *out, struct img_type *img, writeimage callback);
 off_t extract_sw_description(int fd, const char *descfile, off_t start);
 off_t extract_next_file(int fd, int fdout, off_t start, int compressed,
